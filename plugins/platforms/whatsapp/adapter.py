@@ -1250,6 +1250,9 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                         for msg_data in messages:
                             event = await self._build_message_event(msg_data)
                             if event:
+                                if msg_data.get("agentDispatchAllowed") is False:
+                                    await self._handle_ingest_only_event(event)
+                                    continue
                                 if event.message_type == MessageType.TEXT:
                                     self._enqueue_text_event(event)
                                 else:
@@ -1265,6 +1268,38 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                 await asyncio.sleep(5)
             
             await asyncio.sleep(1)  # Poll interval
+
+    async def _handle_ingest_only_event(self, event: MessageEvent) -> None:
+        """Expose a generic WhatsApp ingest-only event to plugins, then drop fail-closed."""
+        try:
+            from hermes_cli.plugins import invoke_hook as _invoke_hook
+
+            gateway = getattr(getattr(self, "_message_handler", None), "__self__", None)
+            session_store = getattr(gateway, "session_store", None) if gateway is not None else None
+            results = _invoke_hook(
+                "pre_gateway_dispatch",
+                event=event,
+                gateway=gateway,
+                session_store=session_store,
+            )
+            handled = any(
+                isinstance(result, dict) and result.get("action") == "skip"
+                for result in results
+            )
+            if not handled:
+                logger.info(
+                    "[%s] Dropped WhatsApp ingest-only event without plugin handler: chat=%s user=%s",
+                    self.name,
+                    getattr(event.source, "chat_id", None),
+                    getattr(event.source, "user_id", None),
+                )
+        except Exception as exc:
+            logger.warning(
+                "[%s] WhatsApp ingest-only plugin hook failed; dropping event fail-closed: %s",
+                self.name,
+                exc,
+                exc_info=True,
+            )
 
     # ── Text debounce batching ──────────────────────────────────────
 

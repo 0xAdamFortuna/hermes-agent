@@ -58,6 +58,12 @@ const WHATSAPP_DEBUG =
   typeof process.env.WHATSAPP_DEBUG === 'string' &&
   ['1', 'true', 'yes', 'on'].includes(process.env.WHATSAPP_DEBUG.toLowerCase());
 
+function envFlag(name, defaultVal = false) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || String(raw).trim() === '') return defaultVal;
+  return ['1', 'true', 'yes', 'on'].includes(String(raw).trim().toLowerCase());
+}
+
 // Opt-in: when true (and WHATSAPP_MODE === 'bot'), fromMe inbound messages
 // that are NOT echoes of our own /send or /send-media calls are forwarded
 // to the Python adapter with `fromOwner: true`. This lets plugins detect
@@ -102,6 +108,7 @@ try {
 const PAIR_ONLY = args.includes('--pair-only');
 const WHATSAPP_MODE = getArg('mode', process.env.WHATSAPP_MODE || 'self-chat'); // "bot" or "self-chat"
 const ALLOWED_USERS = parseAllowedUsers(process.env.WHATSAPP_ALLOWED_USERS || '');
+const FORWARD_UNAUTHORIZED_EVENTS = envFlag('WHATSAPP_FORWARD_UNAUTHORIZED_EVENTS', false);
 const DEFAULT_REPLY_PREFIX = '⚕ *Hermes Agent*\n────────────\n';
 const REPLY_PREFIX = process.env.WHATSAPP_REPLY_PREFIX === undefined
   ? DEFAULT_REPLY_PREFIX
@@ -497,6 +504,8 @@ async function startSocket() {
       const senderId = msg.key.participant || chatId;
       const isGroup = chatId.endsWith('@g.us');
       const senderNumber = senderId.replace(/@.*/, '');
+      let agentDispatchAllowed = true;
+      let ingestReason = null;
 
       // Handle fromMe messages based on mode
       let fromOwner = false;
@@ -568,15 +577,28 @@ async function startSocket() {
           continue;
         }
         if (!matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR)) {
-          try {
-            console.log(JSON.stringify({
-              event: 'ignored',
-              reason: 'allowlist_mismatch',
-              chatId,
-              senderId,
-            }));
-          } catch {}
-          continue;
+          if (WHATSAPP_MODE === 'bot' && FORWARD_UNAUTHORIZED_EVENTS) {
+            agentDispatchAllowed = false;
+            ingestReason = 'allowlist_mismatch';
+            try {
+              console.log(JSON.stringify({
+                event: 'ingest_only',
+                reason: ingestReason,
+                chatId,
+                senderId,
+              }));
+            } catch {}
+          } else {
+            try {
+              console.log(JSON.stringify({
+                event: 'ignored',
+                reason: 'allowlist_mismatch',
+                chatId,
+                senderId,
+              }));
+            } catch {}
+            continue;
+          }
         }
       }
 
@@ -655,6 +677,8 @@ async function startSocket() {
         },
       });
       event.fromOwner = fromOwner;
+      event.agentDispatchAllowed = agentDispatchAllowed;
+      if (ingestReason) event.ingestReason = ingestReason;
 
       // Ignore Hermes' own reply messages in self-chat mode to avoid loops.
       if (msg.key.fromMe && ((REPLY_PREFIX && event.body.startsWith(REPLY_PREFIX)) || recentlySentIds.has(msg.key.id))) {
@@ -1015,6 +1039,9 @@ if (PAIR_ONLY) {
       console.log(`🔒 No WHATSAPP_ALLOWED_USERS set — incoming messages are rejected.`);
       console.log(`   Set WHATSAPP_ALLOWED_USERS=<phone> to authorize specific users,`);
       console.log(`   or WHATSAPP_ALLOWED_USERS=* for an explicit open bot.`);
+    }
+    if (WHATSAPP_MODE === 'bot' && FORWARD_UNAUTHORIZED_EVENTS) {
+      console.log(`📥 Unauthorized inbound messages are forwarded as ingest-only events.`);
     }
     if (WHATSAPP_MODE === 'bot' && FORWARD_OWNER_MESSAGES) {
       console.log(`👤 WHATSAPP_FORWARD_OWNER_MESSAGES=true — owner-typed messages will be forwarded with fromOwner:true`);

@@ -353,6 +353,12 @@ class WhatsAppBehaviorMixin:
         # where the bridge may surface them as "fromMe" events.
         if self._is_broadcast_chat(chat_id_raw):
             return False
+        if data.get("agentDispatchAllowed") is False:
+            # The bridge marks unauthorized bot-mode messages as ingest-only
+            # when WHATSAPP_FORWARD_UNAUTHORIZED_EVENTS is enabled. Build an
+            # event so pre_gateway_dispatch plugins can ingest it, but the
+            # adapter will drop it fail-closed before normal agent dispatch.
+            return True
         is_group = data.get("isGroup", False)
         if is_group:
             chat_id = chat_id_raw
