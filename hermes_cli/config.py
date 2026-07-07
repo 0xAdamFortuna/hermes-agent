@@ -1199,6 +1199,8 @@ DEFAULT_CONFIG = {
         "command_timeout": 30,  # Timeout for browser commands in seconds (screenshot, navigate, etc.)
         "record_sessions": False,  # Auto-record browser sessions as WebM videos
         "allow_private_urls": False,  # Allow navigating to private/internal IPs (localhost, 192.168.x.x, etc.)
+        "allow_file_urls": False,  # Allow navigating to local file:// URLs (direct filesystem read surface)
+        "enforce_private_url_block_on_local_backend": False,  # Also apply private/LAN URL blocking when using local Chromium/Camofox
         # Browser engine for local mode.  Passed as ``--engine <value>`` to
         # agent-browser v0.25.3+.
         # "auto"       — use Chrome (default, don't pass --engine at all)
@@ -1232,6 +1234,15 @@ DEFAULT_CONFIG = {
             "rewrite_loopback_urls": False,
             "loopback_host_alias": "host.docker.internal",
         },
+    },
+
+    "session_search": {
+        # "all" preserves the historical behavior: explicit profile=..., embedded
+        # <profile>/<session_id> links, and bare-id fallback scanning can read any
+        # profile's state.db read-only. "current" confines the tool to the active
+        # HERMES_HOME profile and blocks/scopes all cross-profile lookup paths.
+        "profile_scope": "all",
+        "allow_cross_profile": True,
     },
 
     # Filesystem checkpoints — automatic snapshots before destructive file ops.
@@ -2812,6 +2823,13 @@ DEFAULT_CONFIG = {
         "message_timestamps": {
             "enabled": False,
         },
+
+        # Gateway-only context files appended on the ephemeral system rail for
+        # messaging-platform turns. Entries may be strings or
+        # {path: "...", label: "..."}; relative paths resolve under
+        # HERMES_HOME/profile home. Default empty: users/plugins opt in without
+        # hardcoding private policy files into gateway core.
+        "context_files": [],
 
         # Maximum bytes for an inbound image / audio / video payload the
         # gateway will buffer into memory and cache to disk. Inbound media is

@@ -4697,17 +4697,80 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return []
 
     @staticmethod
-    def _load_ephemeral_system_prompt() -> str:
-        """Load ephemeral system prompt from config or env var.
-        
-        Checks HERMES_EPHEMERAL_SYSTEM_PROMPT env var first, then falls back to
-        agent.system_prompt in ~/.hermes/config.yaml.
+    def _load_gateway_context_files(config: Optional[dict] = None) -> str:
+        """Load configured gateway-only context files as ephemeral system context.
+
+        ``gateway.context_files`` is the gateway analogue of AGENTS/SOUL/MEMORY
+        context, but it stays on the ephemeral-system rail. Entries may be path
+        strings or ``{"path": "...", "label": "..."}`` dicts; relative paths
+        resolve under the active Hermes/profile home. Core owns the generic
+        loading seam. Users/plugins own which files, if any, are injected.
         """
-        prompt = os.getenv("HERMES_EPHEMERAL_SYSTEM_PROMPT", "")
-        if prompt:
-            return prompt
+        cfg = config if isinstance(config, dict) else _load_gateway_runtime_config()
+        gateway_cfg = cfg.get("gateway", {}) if isinstance(cfg, dict) else {}
+        raw_entries = gateway_cfg.get("context_files", []) if isinstance(gateway_cfg, dict) else []
+        if isinstance(raw_entries, (str, Path)):
+            raw_entries = [raw_entries]
+        if not isinstance(raw_entries, list):
+            logger.warning("gateway.context_files must be a list, got %s", type(raw_entries).__name__)
+            return ""
+
+        blocks: list[str] = []
+        base_dir = _gateway_config_home()
+        for entry in raw_entries:
+            label = ""
+            raw_path = ""
+            if isinstance(entry, dict):
+                raw_path = str(entry.get("path") or "").strip()
+                label = str(entry.get("label") or "").strip()
+            else:
+                raw_path = str(entry or "").strip()
+            if not raw_path:
+                continue
+
+            try:
+                path = Path(os.path.expanduser(os.path.expandvars(raw_path)))
+                if not path.is_absolute():
+                    path = base_dir / path
+                path = path.resolve()
+                if not path.exists() or not path.is_file():
+                    logger.debug("Configured gateway context file not found: %s", path)
+                    continue
+                content = path.read_text(encoding="utf-8").strip()
+            except Exception as exc:
+                logger.warning("Failed to load gateway context file %s: %s", raw_path, exc)
+                continue
+            if content:
+                blocks.append(f"## {label or path.name}\n{content}")
+
+        if not blocks:
+            return ""
+
+        header = (
+            "[Gateway-only context files - system context for messaging gateway "
+            "turns, not the user's current request. Do not acknowledge these "
+            "files unless Adam asks about them.]"
+        )
+        return f"{header}\n\n" + "\n\n".join(blocks)
+
+    @staticmethod
+    def _load_ephemeral_system_prompt() -> str:
+        """Load ephemeral system prompt from config/env plus gateway context files.
+
+        HERMES_EPHEMERAL_SYSTEM_PROMPT still overrides agent.system_prompt from
+        config.yaml, preserving the existing user-configured prompt precedence.
+        Gateway context files are additive and remain on the system/context rail.
+        """
         cfg = _load_gateway_runtime_config()
-        return str(cfg_get(cfg, "agent", "system_prompt", default="") or "").strip()
+        prompt = os.getenv("HERMES_EPHEMERAL_SYSTEM_PROMPT", "")
+        if not prompt:
+            prompt = str(cfg_get(cfg, "agent", "system_prompt", default="") or "")
+
+        parts = [prompt.strip()] if str(prompt or "").strip() else []
+        gateway_context = GatewayRunner._load_gateway_context_files(cfg)
+        if gateway_context:
+            parts.append(gateway_context)
+        return "\n\n".join(parts).strip()
 
     def _resolve_model_for_channel(
         self,
