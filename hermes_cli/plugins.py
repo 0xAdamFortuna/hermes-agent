@@ -161,6 +161,10 @@ VALID_HOOKS: Set[str] = {
     "on_session_end",
     "on_session_finalize",
     "on_session_reset",
+    # Classic CLI lifecycle hook. Fired after a successful turn when both
+    # interactive input queues are empty, so plugins can play completion voice,
+    # desktop notifications, or telemetry after a queued batch truly drains.
+    "cli_queue_drained",
     "subagent_start",
     "subagent_stop",
     # Gateway pre-dispatch hook. Fired once per incoming MessageEvent
